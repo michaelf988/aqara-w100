@@ -138,15 +138,19 @@ actions:
           - if:
               - condition: template
                 value_template: >-
-                  {{ state_attr(main_thermostat, "temperature") !=
-                  state_attr(aqara_w100, "temperature") }}
+                  {% set t = state_attr(main_thermostat, "temperature") | float %}
+                  {% set clamped = [state_attr(aqara_w100, 'min_temp'),
+                    [state_attr(aqara_w100, 'max_temp'), t] | min] | max %}
+                  {{ clamped != state_attr(aqara_w100, "temperature") }}
             then:
               - action: climate.set_temperature
                 target:
                   entity_id: !input aqara_w100
                 data:
                   temperature: |
-                    {{ state_attr(main_thermostat, "temperature") }}
+                    {% set t = state_attr(main_thermostat, "temperature") | float %}
+                    {{ [state_attr(aqara_w100, 'min_temp'),
+                        [state_attr(aqara_w100, 'max_temp'), t] | min] | max }}
               - delay:
                   seconds: "{{ sync_delay }}"
           - if:
