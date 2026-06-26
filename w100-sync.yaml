@@ -54,6 +54,19 @@ blueprint:
           max: 10
           step: 1
           unit_of_measurement: seconds
+    enable_fanauto_switch:
+      name: Enable Fan Auto Switch
+      description: Enable if your main thermostat uses a separate switch for auto fan mode
+      default: false
+      selector:
+        boolean:
+    fanauto_switch:
+      name: Fan Auto Switch
+      description: Switch entity that enables auto fan mode on the main thermostat (e.g. switch.knx_klima_fanauto_penelope)
+      default: []
+      selector:
+        entity:
+          domain: switch
     enable_external_data:
       name: Enable External Data Publishing
       description: Publish external temperature and humidity to W100 display
@@ -85,6 +98,8 @@ variables:
   hvac_has_auto: !input hvac_has_auto
   hvac_has_vent: !input hvac_has_vent
   sync_delay: !input sync_delay
+  enable_fanauto_switch: !input enable_fanauto_switch
+  fanauto_switch: !input fanauto_switch
   enable_external_data: !input enable_external_data
   external_temperature_sensor: !input external_temperature_sensor
   external_humidity_sensor: !input external_humidity_sensor
@@ -98,6 +113,10 @@ triggers:
   - trigger: state
     entity_id: !input aqara_w100
     id: w100_climate_state
+  - trigger: state
+    entity_id: !input fanauto_switch
+    id: fanauto_state
+    enabled: !input enable_fanauto_switch
   - trigger: state
     entity_id: !input external_temperature_sensor
     id: ext_temp
@@ -160,33 +179,29 @@ actions:
           - if:
               - condition: template
                 value_template: >-
-                  {# Define the variables#}
-                  {% set source = state_attr(main_thermostat, "fan_mode") %}
-                  {% set target = state_attr(aqara_w100, "fan_mode") %}
-                  {# Normalize the source to lowercase and map med->medium for comparison #}
-                  {% set source_norm = 'medium' if source | lower == 'med' else source | lower %}
-                  {# Compare normalized values #}
-                  {{ 
-                    (source_norm != target) and 
-                    (hvac_has_vent | default(false) | bool) 
-                  }}
+                  {% if not (hvac_has_vent | default(false) | bool) %}
+                    {{ false }}
+                  {% else %}
+                    {% set effective_source = 'auto' if (fanauto_switch != [] and is_state(fanauto_switch, 'on')) else state_attr(main_thermostat, 'fan_mode') %}
+                    {% set target = state_attr(aqara_w100, 'fan_mode') %}
+                    {% set source_norm = 'medium' if effective_source | lower == 'med' else effective_source | lower %}
+                    {{ source_norm != target }}
+                  {% endif %}
             then:
               - action: climate.set_fan_mode
                 target:
                   entity_id: !input aqara_w100
                 data:
                   fan_mode: |
-                    {% set source = state_attr(main_thermostat, "fan_mode") %}
-                    {# If source is med/medium, pass "medium" to the Aqara #}
-                    {% if source | lower == 'med' or source | lower == 'medium' %}
+                    {% set effective_source = 'auto' if (fanauto_switch != [] and is_state(fanauto_switch, 'on')) else state_attr(main_thermostat, 'fan_mode') %}
+                    {% if effective_source | lower == 'med' or effective_source | lower == 'medium' %}
                       medium
-                    {# Otherwise just pass the source through #}
                     {% else %}
-                      {{ source }}
+                      {{ effective_source }}
                     {% endif %}
               - delay:
                   seconds: "{{ sync_delay }}"
-      
+
       - conditions:
           - condition: trigger
             id:
@@ -250,36 +265,99 @@ actions:
                   seconds: "{{ sync_delay }}"
           - if:
               - condition: template
-                value_template: >-
-                  {# Define the variables#}
-                  {% set source = state_attr(main_thermostat, "fan_mode") %}
-                  {% set target = state_attr(aqara_w100, "fan_mode") %}
-                  {# Normalize source to lowercase and map med->medium for comparison #}
-                  {% set source_norm = 'medium' if source | lower == 'med' else source | lower %}
-                  {# Compare normalized values #}
-                  {{ 
-                    (source_norm != target) and 
-                    (hvac_has_vent | default(false) | bool) 
-                  }}
+                value_template: "{{ hvac_has_vent | default(false) | bool }}"
             then:
-              - action: climate.set_fan_mode
-                target:
-                  entity_id: !input main_thermostat
-                data:
-                  fan_mode: |
-                    {% set source = state_attr(aqara_w100, "fan_mode") %}
-                    {% set target_valid_list = state_attr(main_thermostat, "fan_modes") %}
-                    
-                    {# If source is med/medium, find the target's specific medium mode #}
-                    {% if source | lower == 'med' or source | lower == 'medium' %}
-                      {{ target_valid_list | select('search', '(?i)^med') | first | default(source) }}
-                      
-                    {# Otherwise just pass the source through #}
-                    {% else %}
-                      {{ source }}
-                    {% endif %}
-              - delay:
-                  seconds: "{{ sync_delay }}"
+              - choose:
+                  - conditions:
+                      - condition: template
+                        value_template: >-
+                          {{ is_state_attr(aqara_w100, 'fan_mode', 'auto') }}
+                    sequence:
+                      - if:
+                          - condition: template
+                            value_template: >-
+                              {{ fanauto_switch != [] and is_state(fanauto_switch, 'off') }}
+                        then:
+                          - action: switch.turn_on
+                            target:
+                              entity_id: "{{ fanauto_switch }}"
+                          - delay:
+                              seconds: "{{ sync_delay }}"
+                default:
+                  - if:
+                      - condition: template
+                        value_template: >-
+                          {{ fanauto_switch != [] and is_state(fanauto_switch, 'on') }}
+                    then:
+                      - action: switch.turn_off
+                        target:
+                          entity_id: "{{ fanauto_switch }}"
+                      - delay:
+                          seconds: "{{ sync_delay }}"
+                  - if:
+                      - condition: template
+                        value_template: >-
+                          {% set source = state_attr(aqara_w100, "fan_mode") %}
+                          {% set target = state_attr(main_thermostat, "fan_mode") %}
+                          {% set source_norm = 'medium' if source | lower == 'med' else source | lower %}
+                          {{ source_norm != target }}
+                    then:
+                      - action: climate.set_fan_mode
+                        target:
+                          entity_id: !input main_thermostat
+                        data:
+                          fan_mode: |
+                            {% set source = state_attr(aqara_w100, "fan_mode") %}
+                            {% set target_valid_list = state_attr(main_thermostat, "fan_modes") %}
+                            {% if source | lower == 'med' or source | lower == 'medium' %}
+                              {{ target_valid_list | select('search', '(?i)^med') | first | default(source) }}
+                            {% else %}
+                              {{ source }}
+                            {% endif %}
+                      - delay:
+                          seconds: "{{ sync_delay }}"
+
+      - conditions:
+          - condition: trigger
+            id:
+              - fanauto_state
+        sequence:
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ is_state(fanauto_switch, 'on') }}"
+                sequence:
+                  - if:
+                      - condition: template
+                        value_template: >-
+                          {{ not is_state_attr(aqara_w100, 'fan_mode', 'auto') }}
+                    then:
+                      - action: climate.set_fan_mode
+                        target:
+                          entity_id: !input aqara_w100
+                        data:
+                          fan_mode: auto
+                      - delay:
+                          seconds: "{{ sync_delay }}"
+              - conditions:
+                  - condition: template
+                    value_template: "{{ is_state(fanauto_switch, 'off') }}"
+                sequence:
+                  - if:
+                      - condition: template
+                        value_template: >-
+                          {% set knx_fan = state_attr(main_thermostat, 'fan_mode') %}
+                          {% set aqara_valid = state_attr(aqara_w100, 'fan_modes') %}
+                          {{ knx_fan in aqara_valid and not is_state_attr(aqara_w100, 'fan_mode', knx_fan) }}
+                    then:
+                      - action: climate.set_fan_mode
+                        target:
+                          entity_id: !input aqara_w100
+                        data:
+                          fan_mode: |
+                            {{ state_attr(main_thermostat, 'fan_mode') }}
+                      - delay:
+                          seconds: "{{ sync_delay }}"
 
       - conditions:
           - condition: trigger
