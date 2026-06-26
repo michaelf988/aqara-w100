@@ -106,6 +106,10 @@ triggers:
     entity_id: !input external_humidity_sensor
     id: ext_hum
     enabled: !input enable_external_data
+  - trigger: template
+    value_template: >-
+      {{ is_state(thermostat_mode_switch, 'off') }}
+    id: thermostat_mode_off
 
 conditions: []
 
@@ -276,6 +280,15 @@ actions:
                     {% endif %}
               - delay:
                   seconds: "{{ sync_delay }}"
+
+      - conditions:
+          - condition: trigger
+            id:
+              - thermostat_mode_off
+        sequence:
+          - action: climate.turn_off
+            target:
+              entity_id: !input main_thermostat
 
       - conditions:
           - condition: trigger
