@@ -288,7 +288,7 @@ actions:
           - if:
               - condition: template
                 value_template: >-
-                  {{ states(external_temperature_sensor) not in ['unknown', 'unavailable'] }}
+                  {{ external_temperature_sensor != [] and states(external_temperature_sensor) not in ['unknown', 'unavailable'] }}
             then:
               - action: number.set_value
                 target:
@@ -302,7 +302,7 @@ actions:
           - if:
               - condition: template
                 value_template: >-
-                  {{ states(external_humidity_sensor) not in ['unknown', 'unavailable'] }}
+                  {{ external_humidity_sensor != [] and states(external_humidity_sensor) not in ['unknown', 'unavailable'] }}
             then:
               - action: number.set_value
                 target:
